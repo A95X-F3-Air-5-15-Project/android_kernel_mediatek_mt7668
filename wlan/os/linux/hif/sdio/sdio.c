@@ -398,6 +398,12 @@ static int mtk_sdio_pm_suspend(struct device *pDev)
 
 		if (wait > 200) {
 			DBGLOG(HAL, ERROR, "Timeout !!\n\n");
+			/* Leave the ownership handshake state as it was,
+			 * otherwise the next suspend/resume starts with the
+			 * firmware-own request already forced and can wedge
+			 * the bus.
+			 */
+			prGlueInfo->prAdapter->fgForceFwOwn = FALSE;
 			return -EAGAIN;
 		}
 		wait++;
@@ -419,11 +425,21 @@ static int mtk_sdio_pm_suspend(struct device *pDev)
 	if (prGlueInfo->prAdapter->rWifiVar.ucWow &&
 		prGlueInfo->prAdapter->rWowCtrl.fgWowEnable) {
 		set_flag = MMC_PM_WAKE_SDIO_IRQ;
-		ret = sdio_set_host_pm_flags(func, set_flag);
-		if (ret) {
-			DBGLOG(HAL, ERROR, "set flag %d err %d\n", set_flag, ret);
-			DBGLOG(HAL, ERROR,
-				"%s: cannot sdio wake-irq(0x%X)\n", func_id, pm_caps);
+		if (!(pm_caps & set_flag)) {
+			/* The host (meson-g12a mmc) has no wake-irq line:
+			 * requesting it fails with -EINVAL on every suspend.
+			 * Wake-on-WLAN cannot work here anyway, skip it.
+			 */
+			DBGLOG(HAL, WARN,
+				"%s: no sdio wake-irq support(0x%X), skip WoW wake\n",
+				func_id, pm_caps);
+		} else {
+			ret = sdio_set_host_pm_flags(func, set_flag);
+			if (ret) {
+				DBGLOG(HAL, ERROR, "set flag %d err %d\n", set_flag, ret);
+				DBGLOG(HAL, ERROR,
+					"%s: cannot sdio wake-irq(0x%X)\n", func_id, pm_caps);
+			}
 		}
 	}
 
